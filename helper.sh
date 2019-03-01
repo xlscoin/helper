@@ -10,6 +10,13 @@ if [ -z $GH_REPO ]; then
     exit 1
 fi
 
+red=$(tput setaf 1)
+green=$(tput setaf 2)
+white=$(tput setaf 7)
+blue=$(tput setaf 4)
+reset=$(tput sgr0)
+
+
 get_docker_ip () {
     echo $(docker ps -q | xargs -n 1 docker inspect --format '{{ .NetworkSettings.IPAddress }} {{ .Name }}' | sed 's/ \// /' | awk "/$1/ { print \$1; }")
 }
@@ -111,7 +118,8 @@ update_source () {
         read -p "Source path $GH_REPO not found.  Clone git now? (Y/n): " U_INPUT
         if [[ ! $U_INPUT = "n" ]] && [[ ! $U_INPUT = "N" ]]; then
             cd "$RELA_PATH"
-            git clone --branch $GH_BRANCH $GH_URL$GH_REPO
+            git clone $GH_URL$GH_REPO
+            git checkout $GH_BRANCH
         fi
     else
         read -p "Source path $GH_REPO found.  Update now? (Y/n): " U_INPUT
@@ -226,55 +234,86 @@ daemon_restart () {
   docker restart $DOCK_DAEMON
 }
 
+fextract () {
+    echo "$1" | grep $2 | grep -o '[0-9]\+'
+}
+
 docker_monitor () {
-    while [ $? -eq 0 ]; do
+        #check daemon is running
         DAEMON_IP=$(get_docker_ip $DOCK_DAEMON)
         if [ -z $DAEMON_IP ]; then
             echo "Daemon does not seem to be running!"
-        else
-            NODE_INFO=$(wget -qO- $DAEMON_IP:6969/getinfo | jq '{difficulty, hashrate, height, network_height, status, synced, incoming_connections_count, outgoing_connections_count}')
-            DOCKER_IP=$(get_docker_ip $DOCK_MINER)
-            if [ -z $DOCKER_IP ]; then
-                _miner="Miner does not seem to be running"
-            else
-                _miner=$(docker logs --tail 10 dgminer | grep "Mining" | tail -1)
-            fi
-            _difficulty=$(echo "$NODE_INFO" | grep difficulty | grep -o '[0-9]\+')
-            _hashrate=$(echo "$NODE_INFO" | grep hashrate | grep -o '[0-9]\+')
-            _height=$(echo "$NODE_INFO" | grep height | grep -o '[0-9]\+')
-            _netheight=$(echo "$NODE_INFO" | grep network_height | grep -o '[0-9]\+')
-            _heightdiff=$(awk "BEGIN {print $_netheight - $_height}")
-            _incoming=$(echo "$NODE_INFO" | grep incoming_connections_count | grep -o '[0-9]\+')
-            _outgoing=$(echo "$NODE_INFO" | grep outgoing_connections_count | grep -o '[0-9]\+')
-            _synced=$(echo "$NODE_INFO" | grep synced | grep -o true)
-            if [ ! -z $_synced ]; then
-                _synced="Yes"
-            fi
-            clear
-            echo "Docker daemon running on $DAEMON_IP"
-            echo "Difficulty:  $(numfmt --to=si --format='%.2f' $_difficulty)"
-            echo "Hashrate:    $(numfmt --to=si --format='%.3f' $_hashrate)H/s"
-            echo "Height:      $_netheight(+/-$_heightdiff)"
-            echo "Conn.:       In:$_incoming/Out:$_outgoing"
-            if [ ! -z $_synced ]; then
-              echo "Synced:      $_synced"
-            else
-              echo "Syncing..."
-            fi
-            echo "$_miner"
-            if [ $_restartcount -ge 1 ]; then
-                echo "Restarted $_restartcount times"
-            fi
-            if [ ! -z $_synced  ] && [ $_heightdiff -gt $_allowsyncdiff ]; then
-                echo "Out of sync - Restarting daemon!"
-                let "_restartcount++"
-                echo $_restartcount
-                daemon_restart
-                sleep 10
-            else
-                sleep 10
-            fi
+            exit 1
         fi
+
+        while [ $? -eq 0 ]; do
+
+        #grab the info from the daemon's RPC service
+        _noderesp=$(wget --timeout=10 --tries=1 -qO- $DAEMON_IP:$RPC_PORT/info | jq '.')
+        if [ -z "$_noderesp" ]; then
+            echo "no response from rpc server"
+            sleep 5
+            docker_monitor #restart the monitor; maybe the service is unavailable (restarting?)
+        fi
+
+        # get the daemon logs and miner logs if available
+        _taildaemon=$(docker logs --tail 3 $DOCK_DAEMON)
+        MINER_IP=$(get_docker_ip $DOCK_MINER)
+        if [ ! -z $MINER_IP ]; then
+            _tailminer=$(docker logs --tail 3 $DOCK_MINER)
+        fi
+
+        # find the CPU usage of the daemon
+        _pidof=$(pidof $D_EXEC)
+        _daemoncpu=$(cpustat -p $_pidof 0.333 1 | tail -n 2 | head -n 1 | awk '{ print $1 }')
+        if [ $_daemoncpu = "%CPU" ]; then
+            _daemoncpu="0"
+        fi
+
+        _altblocks=$(fextract "$_noderesp" "alt_blocks_count")
+        _txpool=$(fextract "$_noderesp" "tx_pool_size")
+        _hashrate=$(fextract "$_noderesp" "hashrate")
+        _difficulty=$(fextract "$_noderesp" "difficulty")
+        _height=$(fextract "$_noderesp" "height")
+        _netheight=$(fextract "$_noderesp" "network_height")
+        _version=$(echo "$_noderesp" | grep "\"version\"" | awk '{ print $2 }')
+
+        if [ ! -z "$_netheight" ]; then
+            _heightdiff=$(awk "BEGIN {print $_netheight - $_height}")
+        else
+            _heightdiff="n/a"
+        fi
+        _incoming=$(fextract "$_noderesp" "incoming_connections_count")
+        _outgoing=$(fextract "$_noderesp" "outgoing_connections_count")
+
+        sleep 5
+        clear
+
+        echo "Monitoring $D_EXEC $_version on $DAEMON_IP"
+        printf "\nCPU utilisation is\t$_daemoncpu%%\n"
+        printf "Difficulty/ Hashrate:\t$(numfmt --to=si --format='%.2f' $_difficulty)/ $(numfmt --to=si --format='%.3f' $_hashrate)H/s\n"
+        printf "Net Height (local):\t$_netheight(+/-$_heightdiff)\n"
+        printf "Alt Block count:\t$_altblocks\n"
+        printf "TX Pool:\t\t$_txpool\n"
+        printf "Conn.:\t\t\tIn:$_incoming/Out:$_outgoing\n"
+        echo "$_miner"
+        if [ $_restartcount -ge 1 ]; then
+            echo "Restarted $_restartcount times"
+        fi
+        if [ ! -z "$_synced"  ] && [ $_heightdiff -gt $_allowsyncdiff ]; then
+            echo "Out of sync - Restarting daemon!"
+            let "_restartcount++"
+            echo $_restartcount
+            $(daemon_restart)
+        fi
+       
+        echo "Daemon log: "
+        echo "$_taildaemon"
+        if [ ! -z $MINER_IP ]; then
+                printf "\nMiner log: "
+                echo "$_tailminer"
+        fi
+        echo "${reset}"
     done
 }
 
@@ -298,7 +337,7 @@ reset_blockchain () {
     fi
 }
 
-echo $"$_titlebanner"
+echo $"${blue}$_titlebanner${reset}"
 
 case "$1" in
         show)
@@ -333,7 +372,7 @@ case "$1" in
             ;;
         mstart)
             miner_start
-            ;;         
+            ;;
         mstop)
             miner_stop
             ;;
@@ -342,7 +381,7 @@ case "$1" in
             ;;
         dstart)
             daemon_start
-            ;;         
+            ;;
         dstop)
             daemon_stop
             ;;
@@ -356,7 +395,7 @@ case "$1" in
             docker_monitor
             ;;
         about)
-            echo "$_aboutbanner"
+            echo "${blue}$_aboutbanner${reset}"
             ;;
          *)
             echo $"Prep   Usage: $0 {autoprep} || {check|update|compile|strip|build}"

@@ -1,19 +1,19 @@
 #Details of the GitHub source location
-GH_REPO="derogold"
-GH_URL="https://github.com/derogold/" #keep trailing slash
+GH_REPO="wrkzcoin"
+GH_URL="https://github.com/wrkzcoin/" #keep trailing slash
 GH_BRANCH="master"
 
 #Abbreviated coin name or ticker - used for naming the docker containers
-S_NAME="dg"
+S_NAME="wrkz"
 
 #Daemon executable
-D_EXEC="DeroGoldd"
+D_EXEC="Wrkzd"
 M_EXEC="miner"
-P2P_PORT="42069"
-RPC_PORT="6969"
+P2P_PORT="17855"
+RPC_PORT="17856"
 
 #If you change this line you have to rebuild your docker container (./helper build)
-CHECKPOINTS_URL="https://github.com/derogold/checkpoints/raw/master/checkpoints.csv"
+CHECKPOINTS_URL="https://myexplorer.wrkz.work/checkpoints"
 
 #Extra daemon options
 ENABLE_BLOCKEXPLORER="0" # 1 enables option

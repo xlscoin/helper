@@ -1,5 +1,5 @@
 #Details of the GitHub source location
-GH_REPO="NBX"
+GH_REPO="nbx"
 GH_URL="https://github.com/Sudosups/"
 GH_BRANCH="master"
 
@@ -8,14 +8,15 @@ S_NAME="nbx"
 
 #Daemon executable
 D_EXEC="Nibbled"
+M_EXEC="nibbler"
 P2P_PORT="17120"
 RPC_PORT="17122"
 
 #If you change this line you have to rebuild your docker container (./helper build)
-CHECKPOINTS_URL="https://github.com/turtlecoin/checkpoints/raw/master/checkpoints.csv"
+CHECKPOINTS_URL=""
 
 #Extra daemon options
-ENABLE_BLOCKEXPLORER="1" # 1 enables option
+ENABLE_BLOCKEXPLORER="0" # 1 enables option
 FEE_ADDRESS=""
 FEE_AMOUNT="" #empty this to turn off TX fees altogether
 
@@ -36,7 +37,7 @@ ADD_MINER=""
 DATA_DIR=""
 
 #Array containing software build pre-requisites
-declare -a pReq=("build-essential" "g++-8" "gcc-8" "git" "libboost-all-dev" "cmake" "curl" "software-properties-common" "jq")
+declare -a pReq=("build-essential" "g++-8" "gcc-8" "git" "libboost-all-dev" "cmake" "curl" "software-properties-common" "jq" "cpustat")
 declare -i _allowsyncdiff=120 # how many blocks of desync to measure before daemon restart trigger
 declare -i _restartcount=0
 
@@ -95,9 +96,13 @@ if [ ! -z  "$ADD_DAEMON" ]; then
 fi
 DAEMON_COMMAND="docker run $INTMODE-it --restart=unless-stopped -p $RPC_PORT:$RPC_PORT -p $P2P_PORT:$P2P_PORT --name=$DOCK_DAEMON $_mountcommand $GH_REPO $DAEMON_COMMAND"
 
-MINER_COMMAND="/usr/bin/miner --daemon-host=\$DAEMON_IP --threads=$MINE_THREAD --address=$MINE_ADDR"
+if [ -z "$M_EXEC" ]; then
+    M_EXEC="miner"
+fi
+
+MINER_COMMAND="/usr/bin/$M_EXEC --daemon-host=\$DAEMON_IP --threads=$MINE_THREAD --address=$MINE_ADDR"
 if [ ! -z "$ADD_MINER" ]; then
-    ADD_MINER+=" $ADD_MINER"
+    MINER_COMMAND+=" $ADD_MINER"
 fi
 MINER_COMMAND="nice docker run $INTMODE-it --restart=unless-stopped --name=$DOCK_MINER $GH_REPO $MINER_COMMAND"
 
